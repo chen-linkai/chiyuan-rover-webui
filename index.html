@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title></title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- 侧边导航栏（横屏显示） -->
+    <nav class="navigation">
+        <div class="nav-item active" data-page="device">
+            <span class="nav-icon">📱</span>
+            <span data-i18n="nav.device">设备</span>
+        </div>
+        <div class="nav-item" data-page="settings">
+            <span class="nav-icon">⚙️</span>
+            <span data-i18n="nav.settings">设置</span>
+        </div>
+    </nav>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+        <!-- 设备页面 -->
+        <section id="device-page" class="page active">
+            <h1 data-i18n="device.title">设备</h1>
+            
+            <div class="card-container">
+                <div class="card" style="flex: 1 0 10rem;">
+                    <div class="card-title" data-i18n="device.serial.title">串口连接</div>
+                    
+                    <div class="form-group">
+                        <label data-i18n="device.serial.baudrate">波特率</label>
+                        <select id="baudrate-selector">
+                            <option value="9600" selected>9600</option>
+                            <option value="19200">19200</option>
+                            <option value="38400">38400</option>
+                            <option value="57600">57600</option>
+                            <option value="115200">115200</option>
+                            <option value="230400">230400</option>
+                            <option value="460800">460800</option>
+                            <option value="921600">921600</option>
+                        </select>
+                    </div>
+                    
+                    <button id="connect-btn" class="btn btn-primary">
+                        <span class="btn-text" data-i18n="device.serial.connect">连接设备</span>
+                    </button>
+                    
+                    <div id="connection-status" class="status-indicator status-disconnected" style="margin-left: 12px;">
+                        <span data-i18n="device.status.disconnected">未连接</span>
+                    </div>
+                </div>
+
+                <div class="card" style="flex: 1 0;" data-show-when-connected>
+                    <div class="card-title" data-i18n="device.joystick.small">小车摇杆控制</div>
+                    <div class="card-content">
+                        <div class="joystick-container">
+                            <div class="joystick" id="joystick-small">
+                                <div class="joystick-base"></div>
+                                <div class="joystick-handle"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" style="flex: 1 0 12rem;" data-show-when-connected>
+                    <div class="card-content">
+                        <p><strong data-i18n="device.environmentSensor.temperature">温度：</strong> <span id="environmentSensor-temperature">-</span>℃</p>
+                        <p><strong data-i18n="device.environmentSensor.humidity">湿度：</strong> <span id="environmentSensor-humidity">-</span>%</p>
+                        <p><strong data-i18n="device.environmentSensor.lastUpdate">最后更新：</strong> <span id="environmentSensor-lastUpdate">-</span></p>
+                    </div>
+                </div>
+
+                <div class="card" style="flex: 1 0 12rem;" data-show-when-connected>
+                    <div class="card-content">
+                        <iframe src="html/openlayers_map.html" id="location-map-frame" class="location-map-frame"></iframe>
+                        <p><strong data-i18n="device.map.location">经纬度：</strong> <span id="map-location">-</span></p>
+                        <p><strong data-i18n="device.map.lastUpdate">最后更新：</strong> <span id="map-lastUpdate">-</span></p>
+                    </div>
+                </div>
+
+                <div class="card" style="flex: 1 0 24rem;">
+                    <div class="card-content" style="position: relative;">
+                        <video id="camera-showcase" class="camera-showcase" playsinline autoplay>
+                        </video>
+                        <canvas id="camera-canvas"></canvas>
+                        <div id="camera-blocker" class="camera-blocker" data-i18n="device.camera.blocker">点击以唤醒相机</div>
+                    </div>
+                </div>
+
+                <div class="card" style="flex: 1 0 12rem;" data-show-when-connected>
+                    <div class="card-title" data-i18n="device.misc">杂项</div>
+                    <div class="card-content">
+                        <button id="door-open-btn" class="btn btn-primary">
+                            <span class="btn-text" data-i18n="device.misc.openDoor">打开仓门</span>
+                        </button>
+                        <button id="door-close-btn" class="btn btn-primary">
+                            <span class="btn-text" data-i18n="device.misc.closeDoor">关闭仓门</span>
+                        </button>
+                        <button id="brake-small-btn" class="btn btn-primary">
+                            <span class="btn-text" data-i18n="device.misc.smallCarBrake">小车急刹车</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div id="data-monitor-card" style="flex: 1 0 12rem;" class="card" data-show-when-connected>
+                    <div class="card-title" data-i18n="device.data.receive">调试信息</div>
+                    <div class="card-content">
+                        <div id="data-monitor" class="data-monitor"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 设置页面 -->
+        <section id="settings-page" class="page">
+            <h1 data-i18n="settings.title">设置</h1>
+            
+            <div class="card">
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <div class="setting-title" data-i18n="settings.language">语言</div>
+                        <div class="setting-desc" data-i18n="settings.languageDesc">切换界面显示语言</div>
+                    </div>
+                    <select id="language-selector">
+                        <option value="zh-CN" selected>简体中文</option>
+                        <option value="en">English</option>
+                    </select>
+                </div>
+
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <div class="setting-title" data-i18n="settings.theme">深色模式</div>
+                        <div class="setting-desc" data-i18n="settings.themeDesc">选择界面主题样式</div>
+                    </div>
+                    <select id="theme-selector">
+                        <option value="auto" data-i18n="settings.themeAuto">跟随系统</option>
+                        <option value="dark" data-i18n="settings.themeDark">始终启用</option>
+                        <option value="light" data-i18n="settings.themeLight">始终禁用</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="card">
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <div class="setting-title" data-i18n="settings.throttle">限流频率</div>
+                        <div class="setting-desc" data-i18n="settings.throttleDesc">对 UART 的发送进行限流</div>
+                    </div>
+                    <select id="throttle-selector">
+                        <option value="0" data-i18n="settings.throttleDisable">禁用</option>
+                        <option value="1000">1Hz</option>
+                        <option value="500">2Hz</option>
+                        <option value="200">5Hz</option>
+                        <option value="100">10Hz</option>
+                        <option value="50">20Hz</option>
+                        <option value="20">50Hz</option>
+                        <option value="10">100Hz</option>
+                    </select>
+                </div>
+                
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <div class="setting-title" data-i18n="settings.debug">调试模式</div>
+                        <div class="setting-desc" data-i18n="settings.debugDesc">仅限开发者使用</div>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="debug-toggle">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- 底部导航栏（竖屏显示） -->
+    <nav class="nav-bottom">
+        <button class="nav-item active" data-page="device">
+            <span class="nav-icon">📱</span>
+            <span data-i18n="nav.device">设备</span>
+        </button>
+        <button class="nav-item" data-page="settings">
+            <span class="nav-icon">⚙️</span>
+            <span data-i18n="nav.settings">设置</span>
+        </button>
+    </nav>
+
+    <div class="language-selector">
+        <button class="language-btn" id="toggle-lang">EN/中文</button>
+    </div>
+
+    <!-- 引入配置文件 -->
+    <script src="js/config.js"></script>
+    <!-- 引入语言文件 -->
+    <script src="js/languages.js"></script>
+    <!-- 引入主脚本文件 -->
+    <script src="js/script.js"></script>
+</body>
+</html>

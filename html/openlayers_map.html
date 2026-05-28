@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<!--suppress HtmlRequiredLangAttribute -->
+<html>
+<!--suppress HtmlRequiredTitleElement -->
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v9.2.4/ol.css">
+    <style>
+        * {
+            padding: 0;
+            margin: 0;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            bottom: 0;
+        }
+    </style>
+</head>
+<body>
+<div id="map"></div>
+<script src="https://cdn.jsdelivr.net/npm/ol@v9.2.4/dist/ol.js"></script>
+<script>
+var map;
+
+const trackPointsSource = new ol.source.Vector();
+const trackPointsLayer = new ol.layer.Vector({
+    source: trackPointsSource,
+    style: new ol.style.Style({
+        image: new ol.style.Circle({
+            radius: 2,
+            fill: new ol.style.Fill({color: '#ff0000'})
+        })
+    })
+});
+
+const trackLineSource = new ol.source.Vector();
+const trackLineLayer = new ol.layer.Vector({
+    source: trackLineSource,
+    style: new ol.style.Style({
+        stroke: new ol.style.Stroke({
+            color: '#ff0000',
+            width: 2
+        })
+    })
+});
+
+const positionFeature = new ol.Feature();
+const positionSource = new ol.source.Vector();
+const positionLayer = new ol.layer.Vector({
+    source: positionSource,
+    style: new ol.style.Style({
+        image: new ol.style.Circle({
+            radius: 6,
+            fill: new ol.style.Fill({color: 'blue'}),
+            stroke: new ol.style.Stroke({color: 'white', width: 2})
+        })
+    })
+});
+
+const initMap = function() {
+    const mapContainer = document.querySelector('#map');
+
+    if (mapContainer.offsetWidth === 0 || mapContainer.offsetHeight === 0) {
+        setTimeout(initMap, 100);
+        return;
+    }
+
+    map = new ol.Map({
+        target: 'map',
+        layers: [
+            new ol.layer.Tile({
+                //source: new ol.source.OSM()
+                source: new ol.source.XYZ({
+                    url: 'https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
+                    attributions: '© OpenStreetMap contributors'
+                })
+            })
+        ],
+        view: new ol.View({
+            center: ol.proj.fromLonLat([0, 0]),
+            zoom: 18
+        })
+    });
+
+    map.addLayer(trackPointsLayer);
+    map.addLayer(trackLineLayer);
+    map.addLayer(positionLayer);
+}
+
+let pointCounter = 0;
+
+window.addEventListener('message', (e) => {
+    if (e.data['type'] === 'addTrackPoint') {
+        const coordinate = ol.proj.fromLonLat([parseFloat(e.data['lon']), parseFloat(e.data['lat'])]);
+
+        positionFeature.setGeometry(new ol.geom.Point(coordinate));
+        positionSource.clear();
+        positionSource.addFeature(positionFeature);
+
+        const trackPoint = new ol.Feature(new ol.geom.Point(coordinate));
+        trackPoint.set('index', pointCounter++);
+        trackPointsSource.addFeature(trackPoint);
+
+        map.getView().setCenter(coordinate);
+
+        updateTrackLine();
+    }
+});
+
+const updateTrackLine = function() {
+    const pointFeatures = trackPointsSource.getFeatures();
+
+    const sortedFeatures = pointFeatures.sort((a, b) => {
+        return (a.get('index') || 0) - (b.get('index') || 0);
+    });
+
+    const coordinates = sortedFeatures.map(feature =>
+        feature.getGeometry().getCoordinates()
+    );
+
+    trackLineSource.clear();
+
+    if (coordinates.length > 1) {
+        const trackLine = new ol.Feature(new ol.geom.LineString(coordinates));
+        trackLineSource.addFeature(trackLine);
+    }
+};
+
+window.addEventListener('load', initMap);
+</script>
+</body>
+</html>
