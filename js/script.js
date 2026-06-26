@@ -166,6 +166,8 @@ class App {
         this.updateNavigation();
         this.updateTextContent(); // 初始化文本内容
         new JoystickController('joystick-small', 'MOVES');
+        this.heatMapData = null;
+        this.commandBuffer = '';
     }
 
     // 初始化事件监听器
@@ -243,8 +245,7 @@ class App {
     }
 
     async openCamera() {
-        this.heatX = -1;
-        this.heatY = -1;
+        this.heatMapData = null;
 
         const blockerElement = document.getElementById('camera-blocker');
         const videoElement = document.getElementById('camera-showcase');
@@ -276,15 +277,16 @@ class App {
             const draw = function(_this) {
                 canvasContext.clearRect(0, 0, canvasElement.width, canvasElement.height);
                 canvasContext.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
-                if (_this.heatX > 0 && _this.heatY > 0) {
-                    const x = (_this.heatX / 32) * canvasElement.width;
-                    const y = (_this.heatY / 24) * canvasElement.height;
-                    canvasContext.beginPath();
-                    canvasContext.arc(x, y, 5, 0, Math.PI * 2);
-                    canvasContext.fillStyle = 'red';
-                    canvasContext.fill();
-                    canvasContext.font = '32px serif';
-                    canvasContext.fillText("热源", x + 8, y + 32);
+                if (_this.heatMapData && _this.heatMapData.length === 768) {
+                    const cellWidth = canvasElement.width / 32;
+                    const cellHeight = canvasElement.height / 24;
+                    for (let y = 0; y < 24; y++) {
+                        for (let x = 0; x < 32; x++) {
+                            const value = _this.heatMapData[y * 32 + x];
+                            canvasContext.fillStyle = _this.getThermalColor(value);
+                            canvasContext.fillRect(x * cellWidth, y * cellHeight, cellWidth, cellHeight);
+                        }
+                    }
                 }
                 requestAnimationFrame(() => draw(_this));
             };
@@ -505,33 +507,36 @@ class App {
                 
                 if (value) {
                     const text = textDecoder.decode(value);
-                    const command = parseATCommand(text);
-                    if (command) {
-                        switch (command['command']) {
-                            case 'LOCATION': {
-                                document.getElementById('location-map-frame').contentWindow.postMessage({
-                                    type: 'addTrackPoint',
-                                    lon: command['params'][0],
-                                    lat: command['params'][1]
-                                }, '*');
-                                document.getElementById('map-location').textContent = `(${command['params'][0]}, ${command['params'][1]})`;
-                                document.getElementById('map-lastUpdate').textContent = new Date().toLocaleTimeString();
-                                break;
-                            }
-                            case 'ENVIRONMENT': {
-                                document.getElementById('environmentSensor-temperature').textContent = command['params'][0];
-                                document.getElementById('environmentSensor-humidity').textContent = command['params'][1];
-                                document.getElementById('environmentSensor-lastUpdate').textContent = new Date().toLocaleTimeString();
-                                break;
-                            }
-                            case 'HEAT': {
-                                this.heatX = command['params'][0];
-                                this.heatY = command['params'][1];
-                                break;
+                    
+                    // 处理 AT+HEAT 指令（768 个 hex 字符，每个字符为 4 位强度值 0-F）
+                    const heatMatch = text.match(/^AT\+HEAT=(.+)$/im);
+                    if (heatMatch) {
+                        this.handleHeatData(heatMatch[1].trim());
+                        this.displayData(text, 'received');
+                    } else {
+                        const command = parseATCommand(text);
+                        if (command) {
+                            switch (command['command']) {
+                                case 'LOCATION': {
+                                    document.getElementById('location-map-frame').contentWindow.postMessage({
+                                        type: 'addTrackPoint',
+                                        lon: command['params'][0],
+                                        lat: command['params'][1]
+                                    }, '*');
+                                    document.getElementById('map-location').textContent = `(${command['params'][0]}, ${command['params'][1]})`;
+                                    document.getElementById('map-lastUpdate').textContent = new Date().toLocaleTimeString();
+                                    break;
+                                }
+                                case 'ENVIRONMENT': {
+                                    document.getElementById('environmentSensor-temperature').textContent = command['params'][0];
+                                    document.getElementById('environmentSensor-humidity').textContent = command['params'][1];
+                                    document.getElementById('environmentSensor-lastUpdate').textContent = new Date().toLocaleTimeString();
+                                    break;
+                                }
                             }
                         }
+                        this.displayData(text, 'received');
                     }
-                    this.displayData(text, 'received');
                 }
             }
         } catch (error) {
@@ -539,6 +544,30 @@ class App {
         } finally {
             reader.releaseLock();
         }
+    }
+
+    // 处理 768 个 hex 字符的 32x24 热源矩阵
+    // 每个字符代表 4 位强度值（0-F），映射到 0-255 用于热成像显示
+    handleHeatData(hexData) {
+        try {
+            const data = new Uint8Array(768);
+            for (let i = 0; i < 768 && i < hexData.length; i++) {
+                const val = parseInt(hexData[i], 16);
+                data[i] = isNaN(val) ? 0 : val * 17; // 0-F -> 0-255
+            }
+            this.heatMapData = data;
+        } catch (e) {
+            console.error('热源数据 hex 解码失败:', e);
+        }
+    }
+
+    // 将热源值（0-255）映射为热成像颜色，半透明叠加
+    getThermalColor(value) {
+        const normalized = value / 255;
+        const hue = (1 - normalized) * 240; // 240 (蓝) -> 0 (红)
+        const saturation = 90;
+        const lightness = 10 + normalized * 60;
+        return `hsla(${hue}, ${saturation}%, ${lightness}%, 0.65)`;
     }
 
     // 发送数据
