@@ -36,6 +36,8 @@ const LANGUAGE_DATA = {
         'settings.throttle': '限流频率',
         'settings.throttleDesc': '对 UART 的发送进行限流',
         'settings.throttleDisable': '禁用',
+        'settings.heatOpacity': '热成像覆盖度',
+        'settings.heatOpacityDesc': '调节热成像覆盖层的透明度',
         'settings.debug': '调试模式',
         'settings.debugDesc': '仅限开发者使用'
     },
@@ -73,6 +75,8 @@ const LANGUAGE_DATA = {
         'settings.throttle': 'Throttle Frequency',
         'settings.throttleDesc': 'Throttle the transmission of UART',
         'settings.throttleDisable': 'Disabled',
+        'settings.heatOpacity': 'Thermal Overlay Opacity',
+        'settings.heatOpacityDesc': 'Adjust the opacity of the thermal overlay',
         'settings.debug': 'Debug Mode',
         'settings.debugDesc': 'For developers only'
     }

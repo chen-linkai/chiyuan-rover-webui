@@ -351,28 +351,23 @@ input:checked + .toggle-slider:before {
     color: var(--text-secondary);
 }
 
-.language-selector {
-    position: absolute;
-    top: var(--spacing-md);
-    right: var(--spacing-md);
+.setting-control {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    min-width: 12rem;
 }
 
-.language-btn {
-    background: none;
-    border: 1px solid var(--border-color);
+.setting-control input[type="range"] {
+    flex: 1;
+    accent-color: var(--primary-color);
+}
+
+.setting-value {
+    min-width: 2.5rem;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
     color: var(--text-color);
-    padding: 6px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 0.9em;
-}
-
-.language-btn:hover {
-    background-color: rgba(0, 0, 0, 0.05);
-}
-
-[data-theme="dark"] .language-btn:hover {
-    background-color: rgba(255, 255, 255, 0.1);
 }
 
 .data-monitor {
