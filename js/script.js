@@ -30,12 +30,16 @@ let writer = null;
 let isConnected = false;
 
 // ========== 热成像显示常量 ==========
-const HEAT_COLS = 32;              // 温度点阵列数
-const HEAT_ROWS = 24;              // 温度点阵行数
-const HEAT_PIXELS = HEAT_COLS * HEAT_ROWS; // 768 个温度点
-const HEAT_TEMP_MIN = 20;          // 显示映射温度下限（℃）
-const HEAT_TEMP_MAX = 45;          // 显示映射温度上限（℃）
-const HEAT_RENDER_SCALE = 8;       // 热成像离屏渲染放大倍数（32×24 → 256×192）
+// 子车将 32×24 原始温度帧下采样为 16×12（2×2 块平均），每格 1 字节强度
+// （温度 20~40℃ 映射为 0~255）。
+// 帧格式（二进制）：0xAA 0x55 + 192 字节载荷，共 194 字节/帧。
+// 9600bps 下每帧约 202ms，1Hz 回传不会积压。
+const FRAME_HEADER = [0xAA, 0x55];             // 帧头
+const FRAME_LENGTH = 194;                      // 2 字节帧头 + 192 字节载荷
+const FRAME_PAYLOAD_OFFSET = 2;                // 载荷起始偏移
+const HEAT_COLS = 16;                          // 显示列数
+const HEAT_ROWS = 12;                          // 显示行数
+const HEAT_PIXELS = HEAT_COLS * HEAT_ROWS;     // 192 个强度值
 
 // ========== 摇杆控制类 ==========
 class JoystickController {
@@ -120,11 +124,9 @@ class JoystickController {
 // ========== 主应用类 ==========
 class App {
     constructor() {
-        this.buffer = '';               // 文本行缓冲区
-        this.heatMapData = null;        // 热成像温度数据 Float32Array(768)，单位 ℃
-        this.heatOpacity = 0.65;        // 热成像覆盖层透明度（0~1）
-        this.heatCanvas = null;         // 热成像离屏画布（双线性插值渲染结果）
-        this.heatCtx = null;
+        this.buffer = new Uint8Array(0);  // 串口二进制累积缓冲
+        this.heatMapData = null;          // 热成像强度数据 Uint8Array(192)，0~255
+        this.heatOpacity = 0.65;          // 热成像覆盖层透明度（0~1）
         this.init();
     }
 
@@ -209,20 +211,21 @@ class App {
                 };
             });
             await videoElement.play();
-            // 初始化热成像离屏画布：先用双线性插值渲染到低分辨率，
-            // 再在绘制时平滑放大到视频尺寸，兼顾平滑度与性能
-            this.heatCanvas = document.createElement('canvas');
-            this.heatCanvas.width = HEAT_COLS * HEAT_RENDER_SCALE;
-            this.heatCanvas.height = HEAT_ROWS * HEAT_RENDER_SCALE;
-            this.heatCtx = this.heatCanvas.getContext('2d');
-            if (this.heatMapData) this.renderHeatCanvas();
-            canvasContext.imageSmoothingEnabled = true;
             const draw = (_this) => {
                 canvasContext.clearRect(0, 0, canvasElement.width, canvasElement.height);
                 canvasContext.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
-                if (_this.heatCanvas) {
+                // 纯方块像素叠加：16×12 网格，每个强度值画一个实心色块
+                if (_this.heatMapData && _this.heatMapData.length === HEAT_PIXELS) {
+                    const cellWidth = canvasElement.width / HEAT_COLS;
+                    const cellHeight = canvasElement.height / HEAT_ROWS;
                     canvasContext.globalAlpha = _this.heatOpacity;
-                    canvasContext.drawImage(_this.heatCanvas, 0, 0, canvasElement.width, canvasElement.height);
+                    for (let y = 0; y < HEAT_ROWS; y++) {
+                        for (let x = 0; x < HEAT_COLS; x++) {
+                            const intensity = _this.heatMapData[y * HEAT_COLS + x];
+                            canvasContext.fillStyle = _this.getThermalColor(intensity);
+                            canvasContext.fillRect(x * cellWidth, y * cellHeight, cellWidth, cellHeight);
+                        }
+                    }
                     canvasContext.globalAlpha = 1;
                 }
                 requestAnimationFrame(() => draw(_this));
@@ -372,41 +375,95 @@ class App {
         }
     }
 
-    // ========== 串口数据读取（文本模式） ==========
-    async readSerialData() {
-        if (!serialPort || !serialPort.readable) return;
-        const textDecoder = new TextDecoder();
-        reader = serialPort.readable.getReader();
-        let incompleteLine = '';
-        try {
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                if (value) {
-                    const text = textDecoder.decode(value, { stream: true });
-                    incompleteLine += text;
-                    const lines = incompleteLine.split(/\r?\n/);
-                    incompleteLine = lines.pop(); // 保留不完整行
-                    for (const line of lines) {
-                        if (line.trim()) this.processLine(line.trim());
-                    }
-                }
+async readSerialData() {
+    if (!serialPort || !serialPort.readable) return;
+    reader = serialPort.readable.getReader();
+    try {
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (value) {
+                const newBuffer = new Uint8Array(this.buffer.length + value.length);
+                newBuffer.set(this.buffer);
+                newBuffer.set(value, this.buffer.length);
+                this.buffer = newBuffer;
+                this.processThermalFrames();
             }
-        } catch (error) {
-            console.error('读取数据失败:', error);
-        } finally {
-            reader.releaseLock();
+        }
+    } catch (error) {
+        console.error('读取数据失败:', error);
+    } finally {
+        reader.releaseLock();
+    }
+}
+
+findFrameHeader(buf, startIdx = 0) {
+    for (let i = startIdx; i <= buf.length - 2; i++) {
+        if (buf[i] === FRAME_HEADER[0] && buf[i + 1] === FRAME_HEADER[1]) {
+            return i;
         }
     }
+    return -1;
+}
 
-    processLine(line) {
-        // 1. 热成像指令：AT+HEAT=<3072个十六进制字符>（768 点 × 2 字节，温度放大 100 倍）
-        const heatMatch = line.match(/^AT\+HEAT=(.+)$/i);
-        if (heatMatch) {
-            this.handleHeatData(heatMatch[1]);
-            this.displayData(`[HEAT] ${heatMatch[1].substring(0, 20)}...`, 'received');
+// ---------- 帧解析主循环（防止错位与丢帧） ----------
+processThermalFrames() {
+    const buf = this.buffer;
+    let start = 0;
+
+    while (start <= buf.length - FRAME_LENGTH) {
+        const headerIdx = this.findFrameHeader(buf, start);
+        
+        // 找不到帧头：保留最后1个字节（防止0xAA被截断），其余丢弃
+        if (headerIdx === -1) {
+            this.buffer = buf.length > 0 ? buf.slice(buf.length - 1) : new Uint8Array(0);
             return;
         }
+
+        // 找到帧头但数据不够：保留从帧头开始的所有数据
+        if (headerIdx + FRAME_LENGTH > buf.length) {
+            this.buffer = buf.slice(headerIdx);
+            return;
+        }
+
+        // 提取完整帧并解析
+        const frame = buf.slice(headerIdx, headerIdx + FRAME_LENGTH);
+        this.parseThermalFrame(frame);
+        
+        if (window.app && typeof window.app.displayData === 'function') {
+            this.displayData(`[HEAT frame ${frame.length} bytes]`, 'received');
+        }
+
+        // 跳过已处理的数据
+        start = headerIdx + FRAME_LENGTH;
+    }
+
+    // 处理完所有完整帧后，保留剩余不完整数据
+    this.buffer = start < buf.length ? buf.slice(start) : new Uint8Array(0);
+}
+
+parseThermalFrame(frame) {
+    // 载荷即 192 个强度字节（行优先），水平翻转以匹配模块视角（Col1 在右上角）
+    const data = new Uint8Array(HEAT_PIXELS);
+    for (let gy = 0; gy < HEAT_ROWS; gy++) {
+        for (let gx = 0; gx < HEAT_COLS; gx++) {
+            const intensity = frame[FRAME_PAYLOAD_OFFSET + gy * HEAT_COLS + gx];
+            const x = HEAT_COLS - 1 - gx;
+            data[gy * HEAT_COLS + x] = intensity;
+        }
+    }
+    this.heatMapData = data;
+}
+
+// ---------- 颜色映射：蓝(0,0,255) → 红(255,0,0)，透明度由绘制循环的 globalAlpha 统一控制 ----------
+getThermalColor(value) {
+    const normalized = Math.max(0, Math.min(255, value)) / 255; // 0~1
+    const r = Math.round(normalized * 255);
+    const b = Math.round((1 - normalized) * 255);
+    return `rgb(${r}, 0, ${b})`;
+}
+
+    processLine(line) {
         // 2. 其他 AT 指令
         const command = parseATCommand(line);
         if (command) {
@@ -428,79 +485,6 @@ class App {
             }
             this.displayData(line, 'received');
         }
-    }
-
-    // 将 3072 个 hex 字符（768 点 × 2 字节，低字节在前）解析为温度数组（℃）
-    handleHeatData(hexData) {
-        try {
-            if (hexData.length < HEAT_PIXELS * 2) {
-                console.error('热源数据长度不足:', hexData.length);
-                return;
-            }
-            const data = new Float32Array(HEAT_PIXELS);
-            for (let i = 0; i < HEAT_PIXELS; i++) {
-                const low  = parseInt(hexData.substr(i * 2, 2), 16);
-                const high = parseInt(hexData.substr(i * 2 + 2, 2), 16);
-                if (isNaN(low) || isNaN(high)) {
-                    console.error('热源数据解析失败:', hexData.substr(i * 2, 2));
-                    return;
-                }
-                const raw = (high << 8) | low;
-                data[i] = raw / 100.0; // 原始数据为实际温度的 100 倍
-            }
-            this.heatMapData = data;
-            this.renderHeatCanvas();
-        } catch (e) {
-            console.error('热源数据解析失败:', e);
-        }
-    }
-
-    // 在离屏画布上用双线性插值渲染热成像，使点与点之间的过渡更平滑
-    renderHeatCanvas() {
-        if (!this.heatMapData || !this.heatCtx) return;
-        const w = this.heatCanvas.width;
-        const h = this.heatCanvas.height;
-        const imageData = this.heatCtx.createImageData(w, h);
-        const px = imageData.data;
-        let idx = 0;
-        for (let py = 0; py < h; py++) {
-            const ny = py / (h - 1) * (HEAT_ROWS - 1);
-            for (let cx = 0; cx < w; cx++) {
-                const nx = cx / (w - 1) * (HEAT_COLS - 1);
-                const temp = this.bilinearSample(nx, ny);
-                const t = this.getThermalIntensity(temp) / 255;
-                px[idx++] = Math.round(t * 255);       // R
-                px[idx++] = 0;                          // G
-                px[idx++] = Math.round((1 - t) * 255); // B
-                px[idx++] = 255;                        // A
-            }
-        }
-        this.heatCtx.putImageData(imageData, 0, 0);
-    }
-
-    // 双线性插值：在 32×24 温度网格上按浮点坐标取邻近四点加权平均
-    bilinearSample(nx, ny) {
-        const x0 = Math.floor(nx);
-        const y0 = Math.floor(ny);
-        const x1 = Math.min(x0 + 1, HEAT_COLS - 1);
-        const y1 = Math.min(y0 + 1, HEAT_ROWS - 1);
-        const fx = nx - x0;
-        const fy = ny - y0;
-        const d = this.heatMapData;
-        const t00 = d[y0 * HEAT_COLS + x0];
-        const t10 = d[y0 * HEAT_COLS + x1];
-        const t01 = d[y1 * HEAT_COLS + x0];
-        const t11 = d[y1 * HEAT_COLS + x1];
-        return t00 * (1 - fx) * (1 - fy)
-             + t10 * fx * (1 - fy)
-             + t01 * (1 - fx) * fy
-             + t11 * fx * fy;
-    }
-
-    // 温度（℃）→ 显示强度（0~255）
-    getThermalIntensity(temp) {
-        let intensity = (temp - HEAT_TEMP_MIN) / (HEAT_TEMP_MAX - HEAT_TEMP_MIN) * 255;
-        return Math.max(0, Math.min(255, intensity));
     }
 
     // 发送文本指令（摇杆、门控等）
