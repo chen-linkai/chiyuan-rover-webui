@@ -477,11 +477,6 @@ getThermalColor(value) {
                     document.getElementById('map-location').textContent = `(${command.params[0]}, ${command.params[1]})`;
                     document.getElementById('map-lastUpdate').textContent = new Date().toLocaleTimeString();
                     break;
-                case 'ENVIRONMENT':
-                    document.getElementById('environmentSensor-temperature').textContent = command.params[0];
-                    document.getElementById('environmentSensor-humidity').textContent = command.params[1];
-                    document.getElementById('environmentSensor-lastUpdate').textContent = new Date().toLocaleTimeString();
-                    break;
             }
             this.displayData(line, 'received');
         }
