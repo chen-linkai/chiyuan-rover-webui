@@ -377,7 +377,7 @@ input:checked + .toggle-slider:before {
     margin-top: var(--spacing-md);
     border: 1px solid var(--border-color);
     height: 200px;
-    overflow-y: auto;
+    overflow: auto;
     font-family: 'Courier New', monospace;
     font-size: 0.9em;
     user-select: text;
