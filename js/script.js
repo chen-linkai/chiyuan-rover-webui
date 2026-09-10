@@ -1,4 +1,3 @@
-// ========== 解析 AT 指令 ==========
 parseATCommand = function(text) {
     const cleanedText = text.trim();
     const result = { command: '', params: [], original: text };
@@ -23,17 +22,11 @@ parseATCommand = function(text) {
     return result;
 }
 
-// ========== 全局变量 ==========
 let serialPort = null;
 let reader = null;
 let writer = null;
 let isConnected = false;
 
-// ========== 热成像显示常量 ==========
-// 子车将 32×24 原始温度帧下采样为 16×12（2×2 块平均），每格 1 字节强度
-// （温度 20~40℃ 映射为 0~255）。
-// 帧格式（二进制）：0xAA 0x55 + 192 字节载荷，共 194 字节/帧。
-// 9600bps 下每帧约 202ms，1Hz 回传不会积压。
 const FRAME_HEADER = [0xAA, 0x55];             // 帧头
 const FRAME_LENGTH = 194;                      // 2 字节帧头 + 192 字节载荷
 const FRAME_PAYLOAD_OFFSET = 2;                // 载荷起始偏移
@@ -41,7 +34,6 @@ const HEAT_COLS = 16;                          // 显示列数
 const HEAT_ROWS = 12;                          // 显示行数
 const HEAT_PIXELS = HEAT_COLS * HEAT_ROWS;     // 192 个强度值
 
-// ========== 摇杆控制类 ==========
 class JoystickController {
     constructor(joystickId, commandPrefix) {
         this.joystick = document.getElementById(joystickId);
@@ -104,7 +96,7 @@ class JoystickController {
         const limitedX = limitedDistance * Math.cos(angle);
         const limitedY = limitedDistance * Math.sin(angle);
         this.handle.style.transform = `translate(calc(-50% + ${limitedX}px), calc(-50% + ${limitedY}px))`;
-        const speed = Math.round(-limitedY / this.radius * 255);
+        const speed = Math.round(limitedDistance / this.radius * 255);
         const weight = Math.round((limitedX / this.radius + 1) / 2 * 100) / 100;
         const currentTime = Date.now();
         if (!(window.app && typeof window.app.sendData === 'function') || currentTime - this.lastSendTime >= window.app.getSetting('throttleInterval')) {
@@ -174,7 +166,7 @@ class App {
             this.sendData('AT+DOOR=0\r\n');
         });
         document.getElementById('brake-small-btn').addEventListener('click', () => {
-            this.sendData('AT+BRAKES\r\n');
+            this.sendData('AT+MOVES=0,0\r\n');
         });
         window.addEventListener('resize', () => this.updateNavigation());
         window.addEventListener('orientationchange', () => this.updateNavigation());
@@ -375,93 +367,120 @@ class App {
         }
     }
 
-async readSerialData() {
-    if (!serialPort || !serialPort.readable) return;
-    reader = serialPort.readable.getReader();
-    try {
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            if (value) {
-                const newBuffer = new Uint8Array(this.buffer.length + value.length);
-                newBuffer.set(this.buffer);
-                newBuffer.set(value, this.buffer.length);
-                this.buffer = newBuffer;
-                this.processThermalFrames();
+    async readSerialData() {
+        if (!serialPort || !serialPort.readable) return;
+        reader = serialPort.readable.getReader();
+        try {
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                if (value) {
+                    const newBuffer = new Uint8Array(this.buffer.length + value.length);
+                    newBuffer.set(this.buffer);
+                    newBuffer.set(value, this.buffer.length);
+                    this.buffer = newBuffer;
+                    this.processBuffer();
+                }
+            }
+        } catch (error) {
+            console.error('读取数据失败:', error);
+        } finally {
+            reader.releaseLock();
+        }
+    }
+
+    findFrameHeader(buf, startIdx = 0) {
+        for (let i = startIdx; i <= buf.length - 2; i++) {
+            if (buf[i] === FRAME_HEADER[0] && buf[i + 1] === FRAME_HEADER[1]) {
+                return i;
             }
         }
-    } catch (error) {
-        console.error('读取数据失败:', error);
-    } finally {
-        reader.releaseLock();
+        return -1;
     }
-}
 
-findFrameHeader(buf, startIdx = 0) {
-    for (let i = startIdx; i <= buf.length - 2; i++) {
-        if (buf[i] === FRAME_HEADER[0] && buf[i + 1] === FRAME_HEADER[1]) {
-            return i;
+    processBuffer() {
+        while (this.buffer.length > 0) {
+            // 查找帧头位置
+            const headerIdx = this.findFrameHeader(this.buffer, 0);
+
+            // 查找下一个换行符 \n
+            let newlineIdx = -1;
+            for (let i = 0; i < this.buffer.length; i++) {
+                if (this.buffer[i] === 0x0A) { // \n
+                    newlineIdx = i;
+                    break;
+                }
+            }
+
+            // 情况1：缓冲区开头就是二进制帧头
+            if (headerIdx === 0) {
+                if (this.buffer.length >= FRAME_LENGTH) {
+                    const frame = this.buffer.slice(0, FRAME_LENGTH);
+                    this.parseThermalFrame(frame);
+                    this.buffer = this.buffer.slice(FRAME_LENGTH);
+                    continue;
+                } else {
+                    // 数据不够，等待下一批
+                    break;
+                }
+            }
+
+            // 情况2：有换行，且换行在帧头之前（或没有帧头）
+            if (newlineIdx !== -1 && (headerIdx === -1 || newlineIdx < headerIdx)) {
+                const lineBytes = this.buffer.slice(0, newlineIdx + 1);
+                let lineStr = new TextDecoder().decode(lineBytes);
+                lineStr = lineStr.replace(/[\r\n]+$/, ''); // 去掉行尾 \r\n
+
+                if (lineStr.length > 0) {
+                    this.processLine(lineStr);
+                }
+
+                this.buffer = this.buffer.slice(newlineIdx + 1);
+                continue;
+            }
+
+            // 情况3：有帧头但不在开头，且前面没有换行（容错处理）
+            if (headerIdx > 0) {
+                const textBytes = this.buffer.slice(0, headerIdx);
+                let lineStr = new TextDecoder().decode(textBytes);
+                lineStr = lineStr.replace(/[\r\n]+$/, '');
+
+                if (lineStr.length > 0) {
+                    this.processLine(lineStr);
+                }
+
+                this.buffer = this.buffer.slice(headerIdx);
+                continue;
+            }
+
+            // 情况4：既没有帧头也没有换行，数据不完整，等待更多数据
+            break;
         }
     }
-    return -1;
-}
 
-// ---------- 帧解析主循环（防止错位与丢帧） ----------
-processThermalFrames() {
-    const buf = this.buffer;
-    let start = 0;
-
-    while (start <= buf.length - FRAME_LENGTH) {
-        const headerIdx = this.findFrameHeader(buf, start);
-        
-        // 找不到帧头：保留最后1个字节（防止0xAA被截断），其余丢弃
-        if (headerIdx === -1) {
-            this.buffer = buf.length > 0 ? buf.slice(buf.length - 1) : new Uint8Array(0);
-            return;
+    parseThermalFrame(frame) {
+        // 载荷即 192 个强度字节（行优先），水平翻转以匹配模块视角（Col1 在右上角）
+        const data = new Uint8Array(HEAT_PIXELS);
+        for (let gy = 0; gy < HEAT_ROWS; gy++) {
+            for (let gx = 0; gx < HEAT_COLS; gx++) {
+                const intensity = frame[FRAME_PAYLOAD_OFFSET + gy * HEAT_COLS + gx];
+                const x = HEAT_COLS - 1 - gx;
+                data[gy * HEAT_COLS + x] = intensity;
+            }
         }
-
-        // 找到帧头但数据不够：保留从帧头开始的所有数据
-        if (headerIdx + FRAME_LENGTH > buf.length) {
-            this.buffer = buf.slice(headerIdx);
-            return;
-        }
-
-        // 提取完整帧并解析
-        const frame = buf.slice(headerIdx, headerIdx + FRAME_LENGTH);
-        this.parseThermalFrame(frame);
-        
+        this.heatMapData = data;
         if (window.app && typeof window.app.displayData === 'function') {
-            this.displayData(`[HEAT frame ${frame.length} bytes]`, 'received');
-        }
-
-        // 跳过已处理的数据
-        start = headerIdx + FRAME_LENGTH;
-    }
-
-    // 处理完所有完整帧后，保留剩余不完整数据
-    this.buffer = start < buf.length ? buf.slice(start) : new Uint8Array(0);
-}
-
-parseThermalFrame(frame) {
-    // 载荷即 192 个强度字节（行优先），水平翻转以匹配模块视角（Col1 在右上角）
-    const data = new Uint8Array(HEAT_PIXELS);
-    for (let gy = 0; gy < HEAT_ROWS; gy++) {
-        for (let gx = 0; gx < HEAT_COLS; gx++) {
-            const intensity = frame[FRAME_PAYLOAD_OFFSET + gy * HEAT_COLS + gx];
-            const x = HEAT_COLS - 1 - gx;
-            data[gy * HEAT_COLS + x] = intensity;
+            this.displayData(`AT+HEAT=${this.heatMapData}`, 'received');
         }
     }
-    this.heatMapData = data;
-}
 
-// ---------- 颜色映射：蓝(0,0,255) → 红(255,0,0)，透明度由绘制循环的 globalAlpha 统一控制 ----------
-getThermalColor(value) {
-    const normalized = Math.max(0, Math.min(255, value)) / 255; // 0~1
-    const r = Math.round(normalized * 255);
-    const b = Math.round((1 - normalized) * 255);
-    return `rgb(${r}, 0, ${b})`;
-}
+    // ---------- 颜色映射：蓝(0,0,255) → 红(255,0,0)，透明度由绘制循环的 globalAlpha 统一控制 ----------
+    getThermalColor(value) {
+        const normalized = Math.max(0, Math.min(255, value)) / 255; // 0~1
+        const r = Math.round(normalized * 255);
+        const b = Math.round((1 - normalized) * 255);
+        return `rgb(${r}, 0, ${b})`;
+    }
 
     processLine(line) {
         // 2. 其他 AT 指令
