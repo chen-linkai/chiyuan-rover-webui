@@ -96,7 +96,7 @@ class JoystickController {
         const limitedX = limitedDistance * Math.cos(angle);
         const limitedY = limitedDistance * Math.sin(angle);
         this.handle.style.transform = `translate(calc(-50% + ${limitedX}px), calc(-50% + ${limitedY}px))`;
-        const speed = Math.round(limitedDistance / this.radius * 255);
+        const speed = (limitedY != 0 ? -limitedY / Math.abs(limitedY) : 1) * Math.round(limitedDistance / this.radius * 255);
         const weight = Math.round((limitedX / this.radius + 1) / 2 * 100) / 100;
         const currentTime = Date.now();
         if (!(window.app && typeof window.app.sendData === 'function') || currentTime - this.lastSendTime >= window.app.getSetting('throttleInterval')) {
